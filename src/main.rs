@@ -56,7 +56,6 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-
 // ============================================================
 // GENERAL
 // ============================================================
@@ -69,6 +68,25 @@ type AppResult<T> =
 const PROGRESS_EVERY: u64 = 500;
 
 const MAX_PIE_SLICES: usize = 14;
+
+const EXECUTABLE_EXTENSIONS: &[&str] = &[
+    "exe",
+    "scr",
+    "com",
+    "bat",
+    "cmd",
+    "ps1",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "ws",
+    "wsf",
+    "wsh",
+    "msi",
+    "msp",
+    "cpl",
+];
 
 const COLORS: [[u8; 3]; 20] = [
     [46, 204, 113],
@@ -92,26 +110,6 @@ const COLORS: [[u8; 3]; 20] = [
     [54, 162, 235],
     [255, 206, 86],
 ];
-
-const EXECUTABLE_EXTENSIONS: &[&str] = &[
-    "exe",
-    "scr",
-    "com",
-    "bat",
-    "cmd",
-    "ps1",
-    "vbs",
-    "vbe",
-    "js",
-    "jse",
-    "ws",
-    "wsf",
-    "wsh",
-    "msi",
-    "msp",
-    "cpl",
-];
-
 
 // ============================================================
 // SCAN SOURCE
@@ -153,7 +151,6 @@ impl ScanSource {
     }
 }
 
-
 // ============================================================
 // FILE RECORD
 // ============================================================
@@ -164,13 +161,9 @@ struct FileRecord {
     path: String,
     extension: String,
     size: u64,
-
-    // Some ZIP entries don't have a real filesystem path.
     filesystem_path: Option<PathBuf>,
-
     suspicious: bool,
 }
-
 
 // ============================================================
 // EXTENSION STATISTICS
@@ -184,7 +177,6 @@ struct ExtensionStat {
     percentage: f64,
 }
 
-
 // ============================================================
 // COMPLETE SCAN RESULT
 // ============================================================
@@ -197,9 +189,8 @@ struct ScanResult {
     errors: Vec<String>,
 }
 
-
 // ============================================================
-// BACKGROUND SCAN MESSAGE
+// BACKGROUND MESSAGES
 // ============================================================
 
 enum ScanMessage {
@@ -214,9 +205,8 @@ enum ScanMessage {
     Failed(String),
 }
 
-
 // ============================================================
-// SORT MODE
+// SORTING
 // ============================================================
 
 #[derive(Clone, Copy, PartialEq)]
@@ -226,7 +216,6 @@ enum SortMode {
     Largest,
     Smallest,
 }
-
 
 // ============================================================
 // APPLICATION
@@ -244,6 +233,10 @@ struct ScannerApp {
 
     only_suspicious: bool,
     only_no_extension: bool,
+
+    // NEW:
+    generate_pie_chart: bool,
+    generate_report: bool,
 
     selected_file: Option<usize>,
 
@@ -283,6 +276,9 @@ impl Default for ScannerApp {
             only_suspicious: false,
             only_no_extension: false,
 
+            generate_pie_chart: true,
+            generate_report: true,
+
             selected_file: None,
 
             scanning: false,
@@ -308,7 +304,6 @@ impl Default for ScannerApp {
     }
 }
 
-
 // ============================================================
 // MAIN
 // ============================================================
@@ -320,19 +315,16 @@ fn main() -> eframe::Result<()> {
             Ok(true) => {}
 
             Ok(false) => {
-                // The elevated copy is now running.
                 return Ok(());
             }
 
             Err(error) => {
                 let _ = rfd::MessageDialog::new()
                     .set_title(APP_NAME)
-                    .set_description(
-                        format!(
-                            "Could not request administrator privileges.\n\n{}",
-                            error
-                        ),
-                    )
+                    .set_description(format!(
+                        "Could not request administrator privileges.\n\n{}",
+                        error
+                    ))
                     .show();
 
                 return Ok(());
@@ -357,7 +349,6 @@ fn main() -> eframe::Result<()> {
         }),
     )
 }
-
 
 // ============================================================
 // EFRAME APP
@@ -394,7 +385,6 @@ impl eframe::App for ScannerApp {
         }
     }
 }
-
 
 // ============================================================
 // TOOLBAR
@@ -454,9 +444,7 @@ impl ScannerApp {
                 .add_enabled(
                     self.source.is_some()
                         && !self.scanning,
-                    egui::Button::new(
-                        "Rescan",
-                    ),
+                    egui::Button::new("Rescan"),
                 )
                 .clicked()
             {
@@ -483,14 +471,14 @@ impl ScannerApp {
 
         ui.add_space(5.0);
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Search:");
 
             ui.add(
                 egui::TextEdit::singleline(
                     &mut self.search,
                 )
-                .desired_width(480.0)
+                .desired_width(430.0)
                 .hint_text(
                     "filename, full path, extension...",
                 ),
@@ -499,9 +487,7 @@ impl ScannerApp {
             if ui
                 .add_enabled(
                     !self.search.is_empty(),
-                    egui::Button::new(
-                        "Clear",
-                    ),
+                    egui::Button::new("Clear"),
                 )
                 .clicked()
             {
@@ -517,6 +503,21 @@ impl ScannerApp {
                 &mut self.only_no_extension,
                 "No Extension",
             );
+
+            ui.separator();
+
+            // NEW:
+            ui.checkbox(
+                &mut self.generate_pie_chart,
+                "Gen pie-chart",
+            );
+
+            ui.checkbox(
+                &mut self.generate_report,
+                "Gen report",
+            );
+
+            ui.separator();
 
             egui::ComboBox::from_id_salt(
                 "sort_mode",
@@ -564,7 +565,6 @@ impl ScannerApp {
     }
 }
 
-
 // ============================================================
 // START SCREEN
 // ============================================================
@@ -575,7 +575,7 @@ impl ScannerApp {
         ui: &mut Ui,
     ) {
         ui.vertical_centered(|ui| {
-            ui.add_space(110.0);
+            ui.add_space(95.0);
 
             ui.label(
                 RichText::new(
@@ -676,12 +676,24 @@ impl ScannerApp {
                     Color32::from_gray(
                         130,
                     ),
-                ),
-            );
+            ));
+
+            ui.add_space(18.0);
+
+            ui.horizontal(|ui| {
+                ui.checkbox(
+                    &mut self.generate_pie_chart,
+                    "Gen pie-chart",
+                );
+
+                ui.checkbox(
+                    &mut self.generate_report,
+                    "Gen report",
+                );
+            });
         });
     }
 }
-
 
 // ============================================================
 // SCANNING SCREEN
@@ -704,14 +716,12 @@ impl ScannerApp {
             ui.add_space(15.0);
 
             ui.label(
-                RichText::new(
-                    format!(
-                        "{} files",
-                        format_number(
-                            self.scanned_files,
-                        ),
+                RichText::new(format!(
+                    "{} files",
+                    format_number(
+                        self.scanned_files,
                     ),
-                )
+                ))
                 .size(26.0),
             );
 
@@ -754,7 +764,6 @@ impl ScannerApp {
         });
     }
 }
-
 
 // ============================================================
 // DASHBOARD
@@ -851,9 +860,8 @@ impl ScannerApp {
     }
 }
 
-
 // ============================================================
-// PIE CHART
+// IN-APP CHART
 // ============================================================
 
 impl ScannerApp {
@@ -945,7 +953,7 @@ fn draw_in_app_pie(
             stats
                 .iter()
                 .skip(visible_count)
-                .map(|item| item.count)
+                .map(|x| x.count)
                 .sum::<u64>();
 
         if other > 0 {
@@ -959,7 +967,7 @@ fn draw_in_app_pie(
 
     let total =
         data.iter()
-            .map(|item| item.1)
+            .map(|x| x.1)
             .sum::<f64>();
 
     if total <= 0.0 {
@@ -1023,7 +1031,7 @@ fn draw_in_app_pie(
                 step as f32
                     / steps as f32;
 
-            let current_angle =
+            let current =
                 angle
                     + (next_angle
                         - angle)
@@ -1033,17 +1041,15 @@ fn draw_in_app_pie(
                 Pos2::new(
                     center.x
                         + radius
-                            * current_angle
-                                .cos(),
+                            * current.cos(),
                     center.y
                         + radius
-                            * current_angle
-                                .sin(),
+                            * current.sin(),
                 ),
             );
         }
 
-        let slice_color =
+        let color32 =
             Color32::from_rgb(
                 color[0],
                 color[1],
@@ -1053,32 +1059,29 @@ fn draw_in_app_pie(
         painter.add(
             Shape::convex_polygon(
                 points,
-                slice_color,
+                color32,
                 Stroke::new(
                     1.0,
-                    Color32::from_gray(
-                        25,
-                    ),
+                    Color32::from_gray(25),
                 ),
             ),
         );
 
         if fraction >= 0.04 {
             let middle =
-                (angle
-                    + next_angle)
+                (angle + next_angle)
                     / 2.0;
 
-            let label_radius =
+            let text_radius =
                 radius * 0.68;
 
             painter.text(
                 Pos2::new(
                     center.x
-                        + label_radius
+                        + text_radius
                             * middle.cos(),
                     center.y
-                        + label_radius
+                        + text_radius
                             * middle.sin(),
                 ),
                 egui::Align2::CENTER_CENTER,
@@ -1086,9 +1089,7 @@ fn draw_in_app_pie(
                     "{:.1}%",
                     fraction * 100.0,
                 ),
-                FontId::proportional(
-                    13.0,
-                ),
+                FontId::proportional(13.0),
                 Color32::WHITE,
             );
         }
@@ -1102,7 +1103,7 @@ fn draw_in_app_pie(
                 Vec2::splat(14.0),
             ),
             2.0,
-            slice_color,
+            color32,
         );
 
         painter.text(
@@ -1119,12 +1120,8 @@ fn draw_in_app_pie(
                     count as u64,
                 ),
             ),
-            FontId::proportional(
-                12.0,
-            ),
-            Color32::from_gray(
-                220,
-            ),
+            FontId::proportional(12.0),
+            Color32::from_gray(220),
         );
 
         legend_y += 21.0;
@@ -1132,7 +1129,6 @@ fn draw_in_app_pie(
         angle = next_angle;
     }
 }
-
 
 // ============================================================
 // SUMMARY
@@ -1153,11 +1149,13 @@ impl ScannerApp {
                     .size(18.0),
             );
 
-            ui.add_space(8.0);
+            ui.add_space(10.0);
 
+            // IMPORTANT:
+            // Each item is now its own line.
             summary_item(
                 ui,
-                "Files",
+                "Files:",
                 &format_number(
                     self.files.len()
                         as u64,
@@ -1166,7 +1164,7 @@ impl ScannerApp {
 
             summary_item(
                 ui,
-                "Size",
+                "Size:",
                 &format_bytes(
                     self.total_bytes,
                 ),
@@ -1174,7 +1172,7 @@ impl ScannerApp {
 
             summary_item(
                 ui,
-                "Extensions",
+                "Extensions:",
                 &format_number(
                     self.extensions.len()
                         as u64,
@@ -1191,7 +1189,7 @@ impl ScannerApp {
 
             summary_item(
                 ui,
-                "Suspicious",
+                "Suspicious:",
                 &format_number(
                     suspicious as u64,
                 ),
@@ -1199,7 +1197,7 @@ impl ScannerApp {
 
             summary_item(
                 ui,
-                "Errors",
+                "Errors:",
                 &format_number(
                     self.errors.len()
                         as u64,
@@ -1212,6 +1210,8 @@ impl ScannerApp {
                 RichText::new("Reports")
                     .strong(),
             );
+
+            ui.add_space(4.0);
 
             if let Some(path) =
                 &self.png_path
@@ -1229,10 +1229,19 @@ impl ScannerApp {
                     .clicked()
                 {
                     let _ =
-                        open_default(
-                            path,
-                        );
+                        open_default(path);
                 }
+            } else if !self.generate_pie_chart {
+                ui.label(
+                    RichText::new(
+                        "Pie chart disabled",
+                    )
+                    .color(
+                        Color32::from_gray(
+                            130,
+                        ),
+                    ),
+                );
             }
 
             if let Some(path) =
@@ -1251,10 +1260,19 @@ impl ScannerApp {
                     .clicked()
                 {
                     let _ =
-                        open_default(
-                            path,
-                        );
+                        open_default(path);
                 }
+            } else if !self.generate_report {
+                ui.label(
+                    RichText::new(
+                        "Report disabled",
+                    )
+                    .color(
+                        Color32::from_gray(
+                            130,
+                        ),
+                    ),
+                );
             }
 
             ui.separator();
@@ -1291,28 +1309,20 @@ impl ScannerApp {
 
 fn summary_item(
     ui: &mut Ui,
-    name: &str,
+    label: &str,
     value: &str,
 ) {
     ui.horizontal(|ui| {
         ui.label(
-            RichText::new(name)
-                .color(
-                    Color32::from_gray(
-                        150,
-                    ),
-                ),
-        );
-
-        ui.label(
-            RichText::new(value)
+            RichText::new(label)
                 .strong(),
         );
+
+        ui.label(value);
     });
 
-    ui.add_space(3.0);
+    ui.add_space(4.0);
 }
-
 
 // ============================================================
 // FILE TABLE
@@ -1333,18 +1343,14 @@ impl ScannerApp {
             ui.horizontal(|ui| {
                 ui.add_sized(
                     [25.0, 20.0],
-                    egui::Label::new(
-                        "",
-                    ),
+                    egui::Label::new(""),
                 );
 
                 ui.add_sized(
                     [250.0, 20.0],
                     egui::Label::new(
-                        RichText::new(
-                            "Name",
-                        )
-                        .strong(),
+                        RichText::new("Name")
+                            .strong(),
                     ),
                 );
 
@@ -1361,18 +1367,14 @@ impl ScannerApp {
                 ui.add_sized(
                     [100.0, 20.0],
                     egui::Label::new(
-                        RichText::new(
-                            "Size",
-                        )
-                        .strong(),
+                        RichText::new("Size")
+                            .strong(),
                     ),
                 );
 
                 ui.label(
-                    RichText::new(
-                        "Path",
-                    )
-                    .strong(),
+                    RichText::new("Path")
+                        .strong(),
                 );
             });
 
@@ -1528,14 +1530,11 @@ impl ScannerApp {
                 }
 
                 if response.double_clicked() {
-                    self.locate_file(
-                        &file,
-                    );
+                    self.locate_file(&file);
                 }
             });
     }
 }
-
 
 // ============================================================
 // ABOUT
@@ -1566,19 +1565,19 @@ impl ScannerApp {
                 ui.add_space(10.0);
 
                 ui.label(
-                    "Recursive extension scanner with searchable results, ZIP scanning, extension statistics, JSON export and PNG export.",
+                    "Recursive extension scanner with searchable results, ZIP scanning, statistics, and optional report generation.",
                 );
 
                 ui.add_space(10.0);
 
                 ui.label(
-                    "Hidden files are included. A name such as malware.png.exe is marked as suspicious because the final extension is executable and the stem contains another extension.",
+                    "The suspicious check identifies executable filenames containing another extension-like component, for example malware.png.exe.",
                 );
 
                 ui.add_space(10.0);
 
                 ui.label(
-                    "The suspicious check is only a filename heuristic. It does not determine whether a file is actually malware.",
+                    "This is a filename heuristic, not an antivirus engine.",
                 );
 
                 ui.add_space(15.0);
@@ -1591,9 +1590,8 @@ impl ScannerApp {
     }
 }
 
-
 // ============================================================
-// START BACKGROUND SCAN
+// START SCAN
 // ============================================================
 
 impl ScannerApp {
@@ -1671,20 +1669,16 @@ impl ScannerApp {
     }
 }
 
-
 // ============================================================
-// RECEIVE BACKGROUND MESSAGES
+// RECEIVE SCAN MESSAGES
 // ============================================================
 
 impl ScannerApp {
     fn receive_messages(
         &mut self,
     ) {
-        let mut finished =
-            None;
-
-        let mut failed =
-            None;
+        let mut finished = None;
+        let mut failed = None;
 
         if let Some(receiver) =
             &self.receiver
@@ -1773,50 +1767,76 @@ impl ScannerApp {
         self.scan_started =
             None;
 
-        match export_reports(
-            &result.source,
-            &self.extensions,
-            self.total_bytes,
-            self.files.len()
-                as u64,
-        ) {
-            Ok((
-                png,
-                json,
-            )) => {
-                self.png_path =
-                    Some(png);
+        // ----------------------------------------------------
+        // Optional PNG
+        // ----------------------------------------------------
 
-                self.json_path =
-                    Some(json);
-            }
+        if self.generate_pie_chart {
+            match create_png(
+                &result.source,
+                &self.extensions,
+            ) {
+                Ok(path) => {
+                    self.png_path =
+                        Some(path);
+                }
 
-            Err(error) => {
-                let _ =
-                    rfd::MessageDialog::new()
-                        .set_title(
-                            APP_NAME,
-                        )
-                        .set_description(
-                            format!(
-                                "The scan completed, but the report could not be generated.\n\n{}",
-                                error,
-                            ),
-                        )
-                        .show();
+                Err(error) => {
+                    let _ =
+                        rfd::MessageDialog::new()
+                            .set_title(
+                                APP_NAME,
+                            )
+                            .set_description(
+                                format!(
+                                    "The scan completed, but the pie chart could not be generated.\n\n{}",
+                                    error,
+                                ),
+                            )
+                            .show();
+                }
             }
         }
 
-        // Open PNG automatically.
-        if let Some(path) =
-            &self.png_path
-        {
-            let _ =
-                open_default(path);
+        // ----------------------------------------------------
+        // Optional JSON
+        // ----------------------------------------------------
+
+        if self.generate_report {
+            match create_json(
+                &result.source,
+                &self.extensions,
+                self.total_bytes,
+                self.files.len()
+                    as u64,
+            ) {
+                Ok(path) => {
+                    self.json_path =
+                        Some(path);
+                }
+
+                Err(error) => {
+                    let _ =
+                        rfd::MessageDialog::new()
+                            .set_title(
+                                APP_NAME,
+                            )
+                            .set_description(
+                                format!(
+                                    "The scan completed, but the report could not be generated.\n\n{}",
+                                    error,
+                                ),
+                            )
+                            .show();
+                }
+            }
         }
+
+        // IMPORTANT:
+        //
+        // The PNG is deliberately NOT opened anymore.
     }
 }
-
 
 // ============================================================
 // FILTERING
@@ -1850,15 +1870,12 @@ impl ScannerApp {
                             return false;
                         }
 
-                        if search.is_empty() {
-                            return true;
-                        }
-
-                        file.name
-                            .to_lowercase()
-                            .contains(
-                                &search,
-                            )
+                        search.is_empty()
+                            || file.name
+                                .to_lowercase()
+                                .contains(
+                                    &search,
+                                )
                             || file.path
                                 .to_lowercase()
                                 .contains(
@@ -1996,7 +2013,6 @@ impl ScannerApp {
     }
 }
 
-
 // ============================================================
 // SCAN ENGINE
 // ============================================================
@@ -2012,11 +2028,8 @@ fn perform_scan(
         HashMap<String, (u64, u64)> =
         HashMap::new();
 
-    let mut directories =
-        0u64;
-
-    let mut scanned =
-        0u64;
+    let mut directories = 0u64;
+    let mut scanned = 0u64;
 
     let mut errors =
         Vec::new();
@@ -2117,7 +2130,6 @@ fn perform_scan(
     })
 }
 
-
 // ============================================================
 // FOLDER SCANNER
 // ============================================================
@@ -2172,8 +2184,8 @@ fn scan_directory(
 
         let file_type =
             match entry.file_type() {
-                Ok(file_type) =>
-                    file_type,
+                Ok(value) =>
+                    value,
 
                 Err(error) => {
                     errors.push(
@@ -2188,7 +2200,7 @@ fn scan_directory(
                 }
             };
 
-        // Don't follow symbolic links.
+        // Prevent symlink loops.
         if file_type.is_symlink() {
             continue;
         }
@@ -2299,7 +2311,6 @@ fn scan_directory(
 
     Ok(())
 }
-
 
 // ============================================================
 // ZIP SCANNER
@@ -2425,7 +2436,6 @@ fn scan_zip_archive(
     Ok(())
 }
 
-
 // ============================================================
 // EXTENSIONS
 // ============================================================
@@ -2462,9 +2472,8 @@ fn extension_for_name(
     )
 }
 
-
 // ============================================================
-// SUSPICIOUS FILENAME CHECK
+// SUSPICIOUS NAME
 // ============================================================
 
 fn suspicious_name(
@@ -2508,17 +2517,14 @@ fn suspicious_name(
     .is_some()
 }
 
-
 // ============================================================
-// REPORT EXPORT
+// PNG EXPORT
 // ============================================================
 
-fn export_reports(
+fn create_png(
     source: &ScanSource,
     extensions: &[ExtensionStat],
-    total_bytes: u64,
-    total_files: u64,
-) -> AppResult<(PathBuf, PathBuf)> {
+) -> AppResult<PathBuf> {
     let directory =
         executable_directory()?;
 
@@ -2527,7 +2533,7 @@ fn export_reports(
             &source.name(),
         );
 
-    let png =
+    let path =
         directory.join(
             format!(
                 "pie_{}.png",
@@ -2535,47 +2541,16 @@ fn export_reports(
             ),
         );
 
-    let json =
-        directory.join(
-            format!(
-                "extensions_{}.json",
-                name,
-            ),
-        );
+    let total_files =
+        extensions
+            .iter()
+            .map(|x| x.count)
+            .sum::<u64>();
 
-    create_png(
-        &png,
-        extensions,
-        &name,
-        total_files,
-    )?;
-
-    create_json(
-        &json,
-        source,
-        extensions,
-        total_bytes,
-        total_files,
-    )?;
-
-    Ok((png, json))
-}
-
-
-// ============================================================
-// PNG EXPORT
-// ============================================================
-
-fn create_png(
-    path: &Path,
-    extensions: &[ExtensionStat],
-    folder_name: &str,
-    total_files: u64,
-) -> AppResult<()> {
     {
         let root =
             BitMapBackend::new(
-                path,
+                &path,
                 (1500, 900),
             )
             .into_drawing_area();
@@ -2591,7 +2566,7 @@ fn create_png(
         root.titled(
             &format!(
                 "File Extension Distribution - {}",
-                folder_name,
+                name,
             ),
             (
                 "sans-serif",
@@ -2659,7 +2634,7 @@ fn create_png(
             values
                 .iter()
                 .map(
-                    |item| item.0,
+                    |x| x.0,
                 )
                 .collect::<Vec<_>>();
 
@@ -2667,7 +2642,7 @@ fn create_png(
             values
                 .iter()
                 .map(
-                    |item| item.2.clone(),
+                    |x| x.2.clone(),
                 )
                 .collect::<Vec<_>>();
 
@@ -2675,11 +2650,11 @@ fn create_png(
             values
                 .iter()
                 .map(
-                    |item| {
+                    |x| {
                         RGBColor(
-                            item.1[0],
-                            item.1[1],
-                            item.1[2],
+                            x.1[0],
+                            x.1[1],
+                            x.1[2],
                         )
                     },
                 )
@@ -2689,7 +2664,7 @@ fn create_png(
             (430i32, 460i32);
 
         let radius =
-            305f64;
+            305.0f64;
 
         let mut pie =
             Pie::new(
@@ -2718,7 +2693,7 @@ fn create_png(
 
         for (
             count,
-            rgb,
+            color,
             extension,
         ) in &values
         {
@@ -2732,11 +2707,11 @@ fn create_png(
                         * 100.0
                 };
 
-            let color =
+            let rgb =
                 RGBColor(
-                    rgb[0],
-                    rgb[1],
-                    rgb[2],
+                    color[0],
+                    color[1],
+                    color[2],
                 );
 
             root.draw(
@@ -2746,7 +2721,7 @@ fn create_png(
                         (875, y + 25),
                     ],
                     ShapeStyle::from(
-                        &color,
+                        &rgb,
                     )
                     .filled(),
                 ),
@@ -2803,21 +2778,35 @@ fn create_png(
         root.present()?;
     }
 
-    Ok(())
+    Ok(path)
 }
-
 
 // ============================================================
 // JSON EXPORT
 // ============================================================
 
 fn create_json(
-    path: &Path,
     source: &ScanSource,
     extensions: &[ExtensionStat],
     total_bytes: u64,
     total_files: u64,
-) -> AppResult<()> {
+) -> AppResult<PathBuf> {
+    let directory =
+        executable_directory()?;
+
+    let name =
+        sanitize_filename(
+            &source.name(),
+        );
+
+    let path =
+        directory.join(
+            format!(
+                "extensions_{}.json",
+                name,
+            ),
+        );
+
     let mut output =
         String::new();
 
@@ -2915,20 +2904,15 @@ fn create_json(
     );
 
     fs::write(
-        path,
+        &path,
         output,
     )?;
 
-    Ok(())
+    Ok(path)
 }
 
-
 // ============================================================
-// ADMIN / UAC
-// ============================================================
-//
-// OpenProcessToken is in System::Threading for windows 0.62.
-// ShellExecuteW takes Option<HWND> and SHOW_WINDOW_CMD.
+// UAC
 // ============================================================
 
 #[cfg(windows)]
@@ -2946,14 +2930,14 @@ fn ensure_admin() -> AppResult<bool> {
                 .to_string_lossy(),
         );
 
-    let arguments =
+    let args =
         env::args()
             .skip(1)
             .collect::<Vec<String>>();
 
     let argument_string =
         quote_windows_arguments(
-            &arguments,
+            &args,
         );
 
     let arguments_wide =
@@ -2964,24 +2948,25 @@ fn ensure_admin() -> AppResult<bool> {
     let operation =
         wide("runas");
 
-    let result = unsafe {
-        ShellExecuteW(
-            None,
-            PCWSTR(
-                operation.as_ptr(),
-            ),
-            PCWSTR(
-                executable_wide
-                    .as_ptr(),
-            ),
-            PCWSTR(
-                arguments_wide
-                    .as_ptr(),
-            ),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
-    };
+    let result =
+        unsafe {
+            ShellExecuteW(
+                None,
+                PCWSTR(
+                    operation.as_ptr(),
+                ),
+                PCWSTR(
+                    executable_wide
+                        .as_ptr(),
+                ),
+                PCWSTR(
+                    arguments_wide
+                        .as_ptr(),
+                ),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
 
     if result.0 as isize <= 32 {
         return Err(
@@ -2995,7 +2980,6 @@ fn ensure_admin() -> AppResult<bool> {
 
     Ok(false)
 }
-
 
 #[cfg(windows)]
 fn is_admin() -> AppResult<bool> {
@@ -3026,8 +3010,9 @@ fn is_admin() -> AppResult<bool> {
                     as *mut TOKEN_ELEVATION
                     as *mut _,
             ),
-            std::mem::size_of::<TOKEN_ELEVATION>()
-                as u32,
+            std::mem::size_of::<
+                TOKEN_ELEVATION,
+            >() as u32,
             &mut returned_length,
         )?;
 
@@ -3036,7 +3021,6 @@ fn is_admin() -> AppResult<bool> {
         )
     }
 }
-
 
 #[cfg(windows)]
 fn wide(
@@ -3050,7 +3034,6 @@ fn wide(
         .collect()
 }
 
-
 #[cfg(windows)]
 fn quote_windows_arguments(
     args: &[String],
@@ -3063,15 +3046,12 @@ fn quote_windows_arguments(
                         [' ', '\t', '"'],
                     )
                 {
-                    let escaped =
+                    format!(
+                        "\"{}\"",
                         argument.replace(
                             '"',
                             "\\\"",
-                        );
-
-                    format!(
-                        "\"{}\"",
-                        escaped,
+                        ),
                     )
                 } else {
                     argument.clone()
@@ -3081,7 +3061,6 @@ fn quote_windows_arguments(
         .collect::<Vec<_>>()
         .join(" ")
 }
-
 
 // ============================================================
 // PATH HELPERS
@@ -3104,7 +3083,6 @@ fn executable_directory()
             ),
     )
 }
-
 
 fn sanitize_filename(
     value: &str,
@@ -3143,9 +3121,8 @@ fn sanitize_filename(
     }
 }
 
-
 // ============================================================
-// OPEN FILE / DIRECTORY
+// OPEN FILE / FOLDER
 // ============================================================
 
 fn open_default(
@@ -3180,7 +3157,6 @@ fn open_default(
     Ok(())
 }
 
-
 fn reveal_in_explorer(
     path: &Path,
 ) -> AppResult<()> {
@@ -3212,7 +3188,6 @@ fn reveal_in_explorer(
 
     Ok(())
 }
-
 
 // ============================================================
 // FORMATTING
@@ -3251,7 +3226,6 @@ fn format_number(
         .rev()
         .collect()
 }
-
 
 fn format_bytes(
     bytes: u64,
@@ -3292,7 +3266,6 @@ fn format_bytes(
     }
 }
 
-
 fn format_duration(
     duration: Duration,
 ) -> String {
@@ -3318,7 +3291,6 @@ fn format_duration(
         )
     }
 }
-
 
 fn truncate_middle(
     value: &str,
@@ -3357,7 +3329,6 @@ fn truncate_middle(
     )
 }
 
-
 // ============================================================
 // JSON ESCAPING
 // ============================================================
@@ -3372,48 +3343,41 @@ fn json_string(
         in value.chars()
     {
         match character {
-            '"' => {
+            '"' =>
                 output.push_str(
                     "\\\"",
-                );
-            }
+                ),
 
-            '\\' => {
+            '\\' =>
                 output.push_str(
                     "\\\\",
-                );
-            }
+                ),
 
-            '\n' => {
+            '\n' =>
                 output.push_str(
                     "\\n",
-                );
-            }
+                ),
 
-            '\r' => {
+            '\r' =>
                 output.push_str(
                     "\\r",
-                );
-            }
+                ),
 
-            '\t' => {
+            '\t' =>
                 output.push_str(
                     "\\t",
-                );
-            }
+                ),
 
-            c if c.is_control() => {
+            c if c.is_control() =>
                 output.push_str(
                     &format!(
                         "\\u{:04x}",
                         c as u32,
                     ),
-                );
-            }
+                ),
 
-            c => {
-                output.push(c);
-            }
+            c =>
+                output.push(c),
         }
     }
 
